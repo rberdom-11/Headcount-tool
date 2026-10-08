@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CAPS Staffing & Cart Run Tracker</title>
+<style>
+body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 15px; background:#f5f6f7; }
+h1 { font-size: 22px; }
+h2 { font-size: 18px; margin-top: 30px; border-bottom: 2px solid #ddd; padding-bottom: 5px;}
+.card { background:#fff; border:1px solid #ddd; border-radius:8px; padding:15px; margin-bottom:20px; }
+label { display:block; margin-top:10px; font-weight:bold; font-size:13px; }
+input, select { width:100%; padding:8px; margin-top:4px; box-sizing:border-box; border:1px solid #ccc; border-radius:4px; }
+button { margin-top:12px; padding:10px 16px; border:none; border-radius:5px; cursor:pointer; font-weight:bold; }
+.btn-start { background:#2e7d32; color:#fff; }
+.btn-stop { background:#c62828; color:#fff; }
+.btn-calc { background:#1565c0; color:#fff; }
+.btn-export { background:#555; color:#fff; }
+.result { margin-top:12px; padding:10px; background:#eef6ff; border-radius:5px; font-size:14px; }
+table { width:100%; border-collapse:collapse; margin-top:15px; font-size:12px; }
+th, td { border:1px solid #ddd; padding:6px; text-align:center; }
+th { background:#333; color:#fff; }
+.timer-display { font-size:18px; font-weight:bold; color:#1565c0; margin-top:5px; }
+.flag-reduced { color:#c62828; font-weight:bold; }
+.flag-ok { color:#2e7d32; font-weight:bold; }
+.row2 { display:flex; gap:10px; }
+.row2 > div { flex:1; }
+</style>
+</head>
+<body>
+
+<h1>CAPS Staffing &amp; Cart Run Tracker</h1>
+
+<!-- ===================== HOURS NEEDED CALCULATOR ===================== -->
+<div class="card">
+  <h2>Hours Needed Calculator</h2>
+  <label>Package Count (actual/forecast volume)</label>
+  <input type="number" id="pkgCount" placeholder="e.g. 250">
+
+  <div class="row2">
+    <div>
+      <label>Soft Cap</label>
+      <input type="number" id="softCap" placeholder="e.g. 250">
+    </div>
+    <div>
+      <label>Hard Cap</label>
+      <input type="number" id="hardCap" placeholder="e.g. 347">
+    </div>
+  </div>
+
+  <label>Function</label>
+  <select id="functionType">
+    <option value="induct">Induct</option>
+    <option value="stow">Stow</option>
+  </select>
+
+  <div class="row2">
+    <div>
+      <label>Per-Person Rate (PPH) — plug in your logged rate</label>
+      <input type="number" id="rateInput" value="209">
+    </div>
+    <div>
+      <label>Staffing Window Length (hours, optional — for headcount)</label>
+      <input type="number" id="windowHours" placeholder="e.g. 2.5">
+    </div>
+  </div>
+
+  <button class="btn-calc" onclick="calcHours()">Calculate</button>
+  <div class="result" id="hoursResult"></div>
+</div>
+
+<!-- ===================== CART RUN LOGGER ===================== -->
+<div class="card">
+  <h2>Log Cart Run</h2>
+
+  <h3>1. Cart → Buffer</h3>
+  <button class="btn-start" onclick="startTimer('cartCollect')">Start Cart Collection</button>
+  <button class="btn-stop" onclick="stopTimer('cartCollect')">Stop (Dropzone Reached)</button>
+  <div class="timer-display" id="cartCollect_display">00:00</div>
+
+  <label>Cart Contents (package count)</label>
+  <input type="number" id="cartContents" placeholder="e.g. 61">
+
+  <button class="btn-start" onclick="startTimer('cartRemoval')">Start Contents Removal</button>
+  <button class="btn-stop" onclick="stopTimer('cartRemoval')">Stop Removal</button>
+  <div class="timer-display" id="cartRemoval_display">00:00</div>
+
+  <h3>2. Induct</h3>
+  <button class="btn-start" onclick="startTimer('induct')">Start Induct</button>
+  <button class="btn-stop" onclick="stopTimer('induct')">Stop Induct</button>
+  <div class="timer-display" id="induct_display">00:00</div>
+
+  <h3>3. Stow</h3>
+  <button class="btn-start" onclick="startTimer('stow')">Start Stow</button>
+  <button class="btn-stop" onclick="stopTimer('stow')">Stop Stow</button>
+  <div class="timer-display" id="stow_display">00:00</div>
+
+  <button class="btn-calc" onclick="saveCartRun()">Save Cart Run to Log</button>
+  <div class="result" id="cartRunResult"></div>
+</div>
+
+<!-- ===================== LOG TABLE ===================== -->
+<div class="card">
+  <h2>Cart Run Log</h2>
+  <button class="btn-export" onclick="exportCSV()">Export CSV</button>
+  <table id="logTable">
+    <thead>
+      <tr>
+        <th>#</th><th>Pkgs</th>
+        <th>Cart Collect (s)</th><th>Removal (s)</th><th>Cart Handling PPH</th>
+        <th>Induct (s)</th><th>Induct PPH</th>
+        <th>Stow (s)</th><th>Stow PPH</th>
+      </tr>
+    </thead>
+    <tbody id="logBody"></tbody>
+  </table>
+</div>
+
+<script>
+let timers = {};
+let elapsed = { cartCollect:0, cartRemoval:0, induct:0, stow:0 };
+let logData = [];
+
+function startTimer(key){
+  if (timers[key]) return;
+  timers[key] = { start: Date.now() };
+  tick(key);
+}
+function tick(key){
+  if(!timers[key]) return;
+  const secs = Math.floor((Date.now() - timers[key].start)/1000) + (timers[key].base||0);
+  document.getElementById(key+'_display').innerText = formatTime(secs);
+  timers[key].raf = requestAnimationFrame(()=>tick(key));
+}
+function stopTimer(key){
+  if (!timers[key]) return;
+  const secs = Math.floor((Date.now() - timers[key].start)/1000) + (timers[key].base||0);
+  elapsed[key] = secs;
+  cancelAnimationFrame(timers[key].raf);
+  delete timers[key];
+  document.getElementById(key+'_display').innerText = formatTime(secs);
+}
+function formatTime(secs){
+  const m = Math.floor(secs/60).toString().padStart(2,'0');
+  const s = (secs%60).toString().padStart(2,'0');
+  return m+':'+s;
+}
+
+function saveCartRun(){
+  const pkgs = parseFloat(document.getElementById('cartContents').value);
+  if (!pkgs || pkgs <= 0){
+    document.getElementById('cartRunResult').innerText = 'Enter cart contents (package count) first.';
+    return;
+  }
+  const cartCollectSec = elapsed.cartCollect || 0;
+  const cartRemovalSec = elapsed.cartRemoval || 0;
+  const inductSec = elapsed.induct || 0;
+  const stowSec = elapsed.stow || 0;
+
+  const cartHandlingTotalSec = cartCollectSec + cartRemovalSec;
+  const cartHandlingPPH = cartHandlingTotalSec > 0 ? (pkgs / (cartHandlingTotalSec/3600)).toFixed(1) : '-';
+  const inductPPH = inductSec > 0 ? (pkgs / (inductSec/3600)).toFixed(1) : '-';
+  const stowPPH = stowSec > 0 ? (pkgs / (stowSec/3600)).toFixed(1) : '-';
+
+  logData.push({
+    pkgs, cartCollectSec, cartRemovalSec, cartHandlingPPH,
+    inductSec, inductPPH, stowSec, stowPPH
+  });
+
+  renderLog();
+  document.getElementById('cartRunResult').innerText =
+    `Saved: ${pkgs} pkgs — Cart handling ${cartHandlingPPH} PPH, Induct ${inductPPH} PPH, Stow ${stowPPH} PPH`;
+
+  // reset for next run
+  elapsed = { cartCollect:0, cartRemoval:0, induct:0, stow:0 };
+  ['cartCollect','cartRemoval','induct','stow'].forEach(k => document.getElementById(k+'_display').innerText = '00:00');
+  document.getElementById('cartContents').value = '';
+}
+
+function renderLog(){
+  const body = document.getElementById('logBody');
+  body.innerHTML = '';
+  logData.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${i+1}</td><td>${r.pkgs}</td>
+      <td>${r.cartCollectSec}</td><td>${r.cartRemovalSec}</td><td>${r.cartHandlingPPH}</td>
+      <td>${r.inductSec}</td><td>${r.inductPPH}</td>
+      <td>${r.stowSec}</td><td>${r.stowPPH}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+function exportCSV(){
+  if (logData.length === 0){ alert('No cart runs logged yet.'); return; }
+  let csv = 'Run,Pkgs,CartCollectSec,CartRemovalSec,CartHandlingPPH,InductSec,InductPPH,StowSec,StowPPH\n';
+  logData.forEach((r,i) => {
+    csv += `${i+1},${r.pkgs},${r.cartCollectSec},${r.cartRemovalSec},${r.cartHandlingPPH},${r.inductSec},${r.inductPPH},${r.stowSec},${r.stowPPH}\n`;
+  });
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'cart_run_log.csv';
+  a.click();
+}
+
+function calcHours(){
+  const pkgs = parseFloat(document.getElementById('pkgCount').value);
+  const soft = parseFloat(document.getElementById('softCap').value);
+  const hard = parseFloat(document.getElementById('hardCap').value);
+  const rate = parseFloat(document.getElementById('rateInput').value);
+  const windowH = parseFloat(document.getElementById('windowHours').value);
+
+  if (!pkgs || !rate){
+    document.getElementById('hoursResult').innerText = 'Enter package count and a per-person rate.';
+    return;
+  }
+
+  const hoursNeeded = (pkgs / rate).toFixed(2);
+  let flag = '';
+  if (!isNaN(soft) && pkgs < soft) flag = '<span class="flag-reduced">Below soft cap — reduced volume day</span>';
+  else if (!isNaN(hard) && pkgs >= hard) flag = '<span class="flag-reduced">At/above hard cap — escalate</span>';
+  else flag = '<span class="flag-ok">Within normal operating range</span>';
+
+  let headcountMsg = '';
+  if (!isNaN(windowH) && windowH > 0){
+    const heads = (hoursNeeded / windowH).toFixed(2);
+    headcountMsg = `<br>Headcount needed for a ${windowH}hr window: <b>${heads}</b> (round up to whole people)`;
+  }
+
+  document.getElementById('hoursResult').innerHTML =
+    `Hours needed: <b>${hoursNeeded}</b> hrs at ${rate} PPH${headcountMsg}<br>${flag}`;
+}
+</script>
+
+</body>
+</html>
